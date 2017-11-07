@@ -77,36 +77,36 @@ Now, we'll set up some functions for extracting fields from values of this type,
 > getClientID (ClientConstructor clientId _ _ _ _) = clientId
 
 > alterClientID :: (ClientID -> ClientID) -> Client -> Client
-> alterClientID f (ClientConstructor cid con n col s) =
->   ClientConstructor (f cid) con n col s
+> alterClientID f (ClientConstructor cid conn n col s) =
+>   ClientConstructor (f cid) conn n col s
 
 > getConnection :: Client -> WS.Connection
 > getConnection (ClientConstructor _ conn _ _ _) = conn
 
 > alterConnection :: (WS.Connection -> WS.Connection) -> Client -> Client
-> alterConnection f (ClientConstructor cid con n col s) =
->   ClientConstructor cid (f con) n col s
+> alterConnection f (ClientConstructor cid conn n col s) =
+>   ClientConstructor cid (f conn) n col s
 
 > getName :: Client -> T.Text
 > getName (ClientConstructor _ _ name _ _) = name
 
 > alterName :: (T.Text -> T.Text) -> Client -> Client
-> alterName f (ClientConstructor cid con n col s) =
->   ClientConstructor cid con (f n) col s
+> alterName f (ClientConstructor cid conn n col s) =
+>   ClientConstructor cid conn (f n) col s
 
 > getColour :: Client -> Colour
 > getColour (ClientConstructor _ _ _ colour _) = colour
 
 > alterColour :: (Colour -> Colour) -> Client -> Client
-> alterColour f (ClientConstructor cid con n col s) =
->   ClientConstructor cid con n (f col) s
+> alterColour f (ClientConstructor cid conn n col s) =
+>   ClientConstructor cid conn n (f col) s
 
 > getSnake :: Client -> Snake
 > getSnake (ClientConstructor _ _ _ _ snake) = snake
 
 > alterSnake :: (Snake -> Snake) -> Client -> Client
-> alterSnake f (ClientConstructor cid con n col s) =
->   ClientConstructor cid con n col (f s)
+> alterSnake f (ClientConstructor cid conn n col s) =
+>   ClientConstructor cid conn n col (f s)
 
 These are pattern matching functions that simply extract the matched value out, and then give it back or give back an altered version of the Client.
 
@@ -184,7 +184,7 @@ The forM_ function takes a list of items as its first argument, and a function t
 
 In this case, the effect we're describing is an IO () action that sends the message to the client. So we're sending that same message across all of our clients, which we're getting out of the `serverState` by using the getClients function we defined earlier.
 
-Writing Haskell is like wiring together a state machine rather than instructing a machine what to do. You use functions, values and composition to wire it together, then you compile it and the Haskell compiler builds the program that contains the instructions to the computer for you.
+Writing Haskell is like wiring together a state machine rather than instructing a machine what to do. You use functions, values and composition to wire it together, then you compile it and the Haskell compiler builds the program that contains the computer's instructions for you.
 
 > serverApp :: IO ()
 > serverApp = putStrLn "It's not finished yet! :)"
