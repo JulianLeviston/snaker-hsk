@@ -13,7 +13,8 @@ Next up, we have the definition of our module (which is itself a bundle of defin
 
 > module Lib
 >     ( serverApp
->     ) where
+>     )
+>     where
 
 Then, we'll make some imports.
 
@@ -38,7 +39,11 @@ Here we're overloading our qualified import T with the additional IO related fun
 
 and, a module that helps us with actions like IO actions:
 
-> import Control.Monad (forM_)
+> import Control.Monad (forM_, forever)
+
+then a module that lets us work with a type of concurrency primitive:
+
+> import Control.Concurrent (MVar, newMVar, modifyMVar_, modifyMVar, readMVar, forkIO, threadDelay)
 
 Now, we're going to set up some definitions for our data model.
 
@@ -59,11 +64,17 @@ Things to note are:
 
 So...
 
-We'll make a name for the type of the entire server state; this is a type alias, that is, we're giving a new name 'ServerState' to a Map where the keys are ClientID and the values are Client; we'll define what those mean later:
+We'll make a new name for Clients; this is a type alias, that is, we're giving a new name 'Clients' to a Map where the keys are ClientID and the values are Client; we'll define what those mean later:
 
-> type ServerState = DM.Map ClientID Client
+> type Clients = DM.Map ClientID Client
 
-Note that we're not defining a type here, just a new name for a type. That means we can now just write `ServerState` and we'll get the same type as Map ClientID Client, but it doesn't mean it's a type error to use one instead of the other.
+Note that we're not defining a type here, just a new name for a type. That means we can now just write `Clients` and we'll get the same type as Map ClientID Client, but it doesn't mean it's a type error to use one instead of the other.
+
+> type Apples = [Apple]
+
+We'll also set up a type that describes the entire server state. This will be a list of Apples and the Clients
+
+> data ServerState = ServerStateConstructor Clients Apples
 
 Next we'll define a Client data type as a data structure consisting of a Connection, a Name, a Colour, and a Snake:
 
@@ -120,6 +131,7 @@ Now we'll define ClientID, Colour and Snake:
 > type Colour = (Int, Int, Int)
 > type Point = (Int, Int)
 > type Snake = [Point]
+> type Apple = (Point, Int) -- An apple has a point and a time to live
 
 So we'd like a client to be able to connect to the server, giving us its name, and we'd like to send back the map of all the snakes. We'd also like the client to be able to send us control information which will inform our world-stepper what to broadcast to all the connected clients when the world steps its state forward.
 
@@ -128,20 +140,21 @@ Let's set up some initial state and some helper functions for managing the Serve
 Set up the initial server state:
 
 > initialServerState :: ServerState
-> initialServerState = DM.empty
+> initialServerState = ServerStateConstructor DM.empty []
 
 Check if a client exists based on its ClientID:
 
 > clientExists :: Client -> ServerState -> Bool
-> clientExists = DM.member . getClientID
+> clientExists client (ServerStateConstructor clients _) =
+>   DM.member (getClientID client) clients
 
-This function works by composing two other functions: DM.member and getClientID:
+This function works by using two other functions: DM.member and getClientID:
 
-1. You can think of the type of DM.member as `k -> Map k a -> Bool` where `k` is a type-variable representing the type of the keys, and `a` is a type variable representing the values (though, the type of the function is actually Ord k => k -> Map k a -> Bool, which is the same, but constrains the k values such that they have to be only ORDerable types, that is, types that have a definition of some functions required to allow them to do ordering functions, which Data.Map needs to do its work)
+1. DM.member: you can think of the type of DM.member as `k -> Map k a -> Bool` where `k` is a type-variable representing the type of the keys, and `a` is a type variable representing the values (though, the type of the function is actually Ord k => k -> Map k a -> Bool, which is the same, but constrains the k values such that they have to be only ORDerable types, that is, types that have a definition of some functions required to allow them to do ordering functions, which Data.Map needs to do its work)
 
 2. getClientID, whose type is Client -> ClientID we defined ourselves above.
 
-When we "specialise" the type of member to our DM.Map ClientID Client type, it becomes DM.member :: ClientID -> DM.Map ClientID Client -> Bool which means it'll happily fit together with our getClientID function. The `.` operator is a function that composes two functions together into one single function: `clientExists`.
+When we "specialise" the type of member to our DM.Map ClientID Client type, it becomes DM.member :: ClientID -> DM.Map ClientID Client -> Bool which means it'll happily fit together with our getClientID function applied to the passed in client.
 
 
 Next we want to be able to add a client. Data.Map provides the insert function as follows: insert :: Ord k => k -> a -> Map k a -> Map k a
@@ -149,19 +162,24 @@ Next we want to be able to add a client. Data.Map provides the insert function a
 So, we'll use that to make a function to add a client:
 
 > addClient :: Client -> ServerState -> ServerState
-> addClient client serverState =
->   DM.insert (getClientID client) client serverState
+> addClient client (ServerStateConstructor clients apples) =
+>     ServerStateConstructor newClients apples
+>   where newClients = DM.insert (getClientID client) client clients
+
+The where clause introduces a set of definitions that can be used in the expressions above.
 
 Removing a client, using Data.Map's delete :: Ord k => k -> Map k a -> Map k a
 
 > removeClient :: Client -> ServerState -> ServerState
-> removeClient =
->   DM.delete . getClientID
+> removeClient client (ServerStateConstructor clients apples) =
+>     ServerStateConstructor newClients apples
+>   where newClients = DM.delete (getClientID client) clients
 
 Get a list of clients from the server state, we use the Data.Map elems function, which gets a list of the values from a Map. Providing these kinds of interface functions allow us to refactor much more easily later on, or change the internal design if we would like to, because they decouple the dependencies:
 
 > getClients :: ServerState -> [Client]
-> getClients = DM.elems
+> getClients (ServerStateConstructor clients _) =
+>   DM.elems clients
 
 Now we want a way to send a message to one client:
 
@@ -173,12 +191,12 @@ Now we want a way to send a message to one client:
 Then we want a way to use that function to send a message to _all_ of our clients:
 
 > broadcast :: T.Text -> ServerState -> IO ()
-> broadcast message serverState = do
+> broadcast message (ServerStateConstructor clients _) = do
 >   T.putStrLn message
 >   let
 >     sendMessageToClient :: Client -> IO ()
 >     sendMessageToClient = sendTextDataToClient message
->   forM_ (getClients serverState) sendMessageToClient
+>   forM_ clients sendMessageToClient
 
 The forM_ function takes a list of items as its first argument, and a function that can produce an IO () action as its second argument, then it evaluates to an action that uses each item of the list and passes it to its function argument, threading the resultant effect along as it does so, building up one big composed action as a result.
 
@@ -186,5 +204,54 @@ In this case, the effect we're describing is an IO () action that sends the mess
 
 Writing Haskell is like wiring together a state machine rather than instructing a machine what to do. You use functions, values and composition to wire it together, then you compile it and the Haskell compiler builds the program that contains the computer's instructions for you.
 
+
+Ok, so next, serverApp is an IO action, which we build using a do block to create an initial server state inside a concurrency primitive, and then pass that to the websocketHandler function.
+
+The <- syntax in the do block represents pulling a variable that represents a value out from the IO context so that we can then wire it into another expression. In this case, we're passing it to the websocketHandler function which we're then calling runServer on to start the server, bound to a particular IP address and port.
+
+At this point, we need to fork another thread to run the game state stepper itself.
+
+We should also mention that the ($) function is the low precedence function application operator. It takes the function to the left hand side of it, and applies it to the expression to the right hand side of it as a value. We use it to avoid having to wrap expressions to the right in parenthesis.
+
 > serverApp :: IO ()
-> serverApp = putStrLn "It's not finished yet! :)"
+> serverApp = do
+>   serverStateMVar <- newMVar initialServerState
+>   forkIO $ gameWorldRunner serverStateMVar
+>   WS.runServer "127.0.0.1" 3033 $ websocketHandler serverStateMVar
+
+Next we'll define the gameWorldRunner, which is effectively where all of the game logic will reside.
+
+> gameWorldRunner :: MVar ServerState -> IO ()
+> gameWorldRunner serverStateMVar = do
+>   putStrLn "Hey from the gameWorldRunner"
+>   return ()
+
+Next we'll define our websocketHandler function whose job it is to respond to websocket requests:
+
+> websocketHandler :: MVar ServerState -> WS.ServerApp
+> websocketHandler serverStateMVar pendingConnection = do
+>   modifyMVar_ serverStateMVar (fmap return addApple)
+>   state <- readMVar serverStateMVar
+>   putStr "Hey from the websocketHandler"
+>   putStrLn $ " - there are " ++ show (getApplesCount state) ++ " apples."
+>   threadDelay $ (10^6) * 3 -- three seconds
+>   modifyMVar_ serverStateMVar (fmap return removeApple)
+>   stateAfter <- readMVar serverStateMVar
+>   putStr "Goodbye from the websocketHandler"
+>   putStrLn $ " - there are now " ++ show (getApplesCount stateAfter) ++ " apples."
+>   return ()
+
+The `WS.ServerApp` type is a synonym for `WS.PendingConnection -> IO ()`
+
+> addApple :: ServerState -> ServerState
+> addApple (ServerStateConstructor clients apples) =
+>   ServerStateConstructor clients $ ((0,0), 0) : apples
+
+> removeApple :: ServerState -> ServerState
+> removeApple ss @ (ServerStateConstructor clients []) = ss
+> removeApple (ServerStateConstructor clients (apple : apples)) =
+>   ServerStateConstructor clients apples
+
+> getApplesCount :: ServerState -> Int
+> getApplesCount (ServerStateConstructor _ apples) = length apples
+
